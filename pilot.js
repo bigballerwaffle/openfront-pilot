@@ -1,4 +1,4 @@
-// OpenFront Pilot 0.12.0 — locally running strategy bot. See README.md.
+// OpenFront Pilot 0.13.0 — locally running strategy bot. See README.md.
 (() => {
   // src/panel.js
   function createPanel(document2) {
@@ -276,7 +276,7 @@
         <div class="mark">P</div>
         <div>
           <h1>OpenFront Pilot</h1>
-          <div class="version">LOCAL STRATEGY BOT \xB7 v0.12.0</div>
+          <div class="version">LOCAL STRATEGY BOT \xB7 v0.13.0</div>
         </div>
         <div class="spacer"></div>
         <button class="icon collapse" aria-label="Collapse panel" title="Collapse">\u2212</button>
@@ -310,6 +310,16 @@
         <div class="setting">
           <label for="economy">Build & upgrade</label><input type="checkbox" id="economy" checked />
         </div>
+        <button id="spending" type="button" aria-pressed="true">
+          Bot spending: ON \u2014 click to save gold
+        </button>
+        <p class="learning-copy">
+          OFF blocks all bot gold purchases. Only you can turn it back on. Manual purchases still
+          work.
+        </p>
+        <p class="learning-copy" id="coach-status">
+          Manual guidance is learned while the pilot and learning are on.
+        </p>
         <div class="setting">
           <label for="navy">Naval expansion</label><input type="checkbox" id="navy" checked />
         </div>
@@ -464,6 +474,7 @@
   var DEFAULTS = Object.freeze({
     profile: "balanced",
     economy: true,
+    spending: true,
     navy: true,
     nukes: true,
     learning: true,
@@ -993,6 +1004,8 @@
     if (!valid() || game.owner(action.tile).id() !== action.targetID || friendly(ourPlayer, game.owner(action.tile)))
       return null;
     if (action.kind === "attack" && !can.canAttack) return null;
+    if (action.kind === "boat" && adapter.spendingAllowed?.() === false && can.buildableUnits.some((b) => b.type === U.transport && number(b.cost) > 0))
+      return null;
     if (action.kind === "boat" && !can.buildableUnits.some((b) => b.type === U.transport && b.canBuild !== false))
       return null;
     let latestTroops = Math.floor(Math.min(troops, ourPlayer.troops() - action.reserve));
@@ -1235,7 +1248,39 @@
     emit(key, args) {
       const Ctor = this.events[key];
       if (!Ctor) throw new Error(`The ${key} command is unavailable in this client.`);
-      this.bus.emit(Reflect.construct(Ctor, args));
+      const event = Reflect.construct(Ctor, args);
+      this.ownEvents ??= /* @__PURE__ */ new WeakSet();
+      this.ownEvents.add(event);
+      this.bus.emit(event);
+    }
+    observeManual(callback) {
+      const bus = this.bus, original = bus.emit, bridge = this;
+      const descriptor = Object.getOwnPropertyDescriptor(bus, "emit");
+      function wrapped(event, ...args) {
+        if (!bridge.ownEvents?.has(event)) {
+          const kind = Object.keys(bridge.events).find(
+            (k) => event?.constructor === bridge.events[k]
+          );
+          if (kind) {
+            try {
+              callback(kind, event);
+            } catch {
+            }
+          }
+        }
+        return Reflect.apply(original, this, [event, ...args]);
+      }
+      try {
+        bus.emit = wrapped;
+      } catch {
+        return null;
+      }
+      if (bus.emit !== wrapped) return null;
+      return () => {
+        if (bus.emit !== wrapped) return;
+        if (descriptor) Object.defineProperty(bus, "emit", descriptor);
+        else delete bus.emit;
+      };
     }
   };
 
@@ -1457,7 +1502,7 @@
     // Revalidate against current state after asynchronous planning and before send.
     async execute(state, action, stillRunning) {
       const game = state.game, ourPlayer = game.myPlayer();
-      const valid = () => stillRunning() && this.sameGame(game) && ourPlayer === game.myPlayer() && ourPlayer.isAlive() && !game.inSpawnPhase() && !game.gameOver?.() && !game.isCatchingUp?.();
+      const valid = () => stillRunning() && (action.kind !== "build" || this.spendingAllowed?.() !== false) && this.sameGame(game) && ourPlayer === game.myPlayer() && ourPlayer.isAlive() && !game.inSpawnPhase() && !game.gameOver?.() && !game.isCatchingUp?.();
       if (!valid()) return null;
       if (action.kind === "attack" || action.kind === "boat") {
         return executeAttack(this, state, action, ourPlayer, valid);
@@ -2036,6 +2081,88 @@
     return { gain, loss: gain * loss };
   }
 
+  // src/coaching.js
+  var LABELS = ["attack", "neutral", "city", "income", "save", "spend", "nuke", "boat", "defense"];
+  function coachingState(game) {
+    try {
+      const me = game?.myPlayer?.(), config = game?.config?.();
+      if (!me?.isAlive?.() || game.inSpawnPhase?.() || config?.isReplay?.() || config?.isIntentionalSpectator?.())
+        return null;
+      const gold = number(me.gold()), troops = number(me.troops()), cap = number(config.maxTroops(me));
+      const age = game.ticksSinceStart?.();
+      if (![gold, troops, cap, age].every(Number.isFinite) || cap <= 0) return null;
+      const units = me.units();
+      return {
+        game,
+        me,
+        gold,
+        troops,
+        cap,
+        age,
+        key: [
+          age < 6e3 ? "early" : "late",
+          gold < 1e6 ? "low" : gold < 5e6 ? "mid" : "high",
+          units.some((u) => u.type() === U.silo) ? "silo" : "no-silo",
+          me.incomingAttacks().length ? "pressure" : "calm",
+          troops / cap >= 0.85 ? "full" : "growing"
+        ].join(":")
+      };
+    } catch {
+      return null;
+    }
+  }
+  function lesson(kind, event, state) {
+    if (kind === "save" || kind === "spend") return { label: kind, value: 1 };
+    if (kind === "attack") {
+      const share = number(event.troops) / state.troops;
+      if (!Number.isFinite(share) || share <= 0 || share > 1) return null;
+      return {
+        label: event.targetID == null || event.targetID === 0 ? "neutral" : "attack",
+        value: share
+      };
+    }
+    if (kind === "boat") return { label: "boat", value: 1 };
+    if (kind !== "build" && kind !== "upgrade") return null;
+    const unit = event.unit ?? event.unitType;
+    const label = unit === U.city ? "city" : [U.port, U.factory].includes(unit) ? "income" : [U.atom, U.hydrogen, U.mirv, U.silo].includes(unit) ? "nuke" : [U.defense, U.sam, U.warship].includes(unit) ? "defense" : null;
+    return label ? { label, value: 1 } : null;
+  }
+  function validateCoaching(raw = []) {
+    if (!Array.isArray(raw) || raw.length > 24) throw Error("Invalid coaching memory.");
+    const rows = raw.map((row) => {
+      if (typeof row.key !== "string" || row.key.length > 240 || !row.key || !row.stats || typeof row.stats !== "object")
+        throw Error("Invalid coaching context.");
+      const stats = {};
+      for (const [label, s] of Object.entries(row.stats)) {
+        if (!LABELS.includes(label) || !Number.isInteger(s.count) || s.count < 1 || s.count > 100 || !Number.isFinite(s.sum) || s.sum < 0 || s.sum > s.count)
+          throw Error("Invalid coaching sample.");
+        stats[label] = { count: s.count, sum: s.sum };
+      }
+      return { key: row.key, stats };
+    });
+    if (new Set(rows.map((r) => r.key)).size !== rows.length)
+      throw Error("Duplicate coaching context.");
+    return rows;
+  }
+  function coachedTuning(base, stats = {}) {
+    const next = { ...base };
+    for (const [label, low, high] of [
+      ["attack", 0.64, 0.72],
+      ["neutral", 0.16, 0.29]
+    ]) {
+      const s = stats[label];
+      if (s?.count >= 3) next[label] = clamp(base[label] * 0.5 + s.sum / s.count * 0.5, low, high);
+    }
+    const cities = stats.city?.count ?? 0, income = stats.income?.count ?? 0;
+    if (cities + income >= 3)
+      next.city = clamp(base.city * 0.5 + cities / (cities + income) * 0.5, 0.56, 0.64);
+    return next;
+  }
+  function prefersSaving(stats = {}) {
+    const save = stats.save?.count ?? 0, spend = stats.spend?.count ?? 0;
+    return save >= 3 && save / (save + spend) >= 0.75;
+  }
+
   // src/learning.js
   var LEARNING_KEY = "openfront-pilot-learning-v1";
   var LIMITS = Object.freeze({
@@ -2119,7 +2246,8 @@
     contexts: [],
     history: [],
     seen: [],
-    outcomes: []
+    outcomes: [],
+    coaching: []
   });
   var arm = () => ({ games: 0, wins: 0, weight: 0, reward: 0 });
   var bounded = (n, max = 1e9) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= max;
@@ -2159,6 +2287,7 @@
         };
       }
       return {
+        assisted: h.assisted === true,
         reward,
         territory,
         id: h.id,
@@ -2182,7 +2311,8 @@
       contexts,
       history,
       seen: [...new Set(d.seen)],
-      outcomes
+      outcomes,
+      coaching: validateCoaching(d.coaching)
     };
   }
   function contextKey(game, options) {
@@ -2190,7 +2320,7 @@
     const part = (x) => String(x ?? "unknown").replace(/[|]/g, "_").slice(0, 24);
     const custom = Boolean(config.infiniteGold || config.infiniteTroops || config.instantBuild);
     return [
-      "conquest-v12-early-navy",
+      "conquest-v13-coaching",
       config.gameType,
       config.gameMode,
       config.difficulty,
@@ -2259,6 +2389,32 @@
       }
       return VARIANTS[index];
     }
+    async teach(key, sample2, accept = () => true) {
+      const commit = () => {
+        if (!accept()) return false;
+        this.reload();
+        const rows = structuredClone(this.data.coaching);
+        let row = rows.find((r) => r.key === key);
+        if (row) rows.splice(rows.indexOf(row), 1);
+        else row = { key, stats: {} };
+        const stat = row.stats[sample2.label] ?? { count: 0, sum: 0 };
+        if (stat.count >= 100) {
+          stat.sum *= 0.99;
+          stat.count = 99;
+        }
+        stat.count++;
+        stat.sum += sample2.value;
+        row.stats[sample2.label] = stat;
+        rows.push(row);
+        const coaching = validateCoaching(rows.slice(-24));
+        const next = { ...this.data, coaching };
+        if (JSON.stringify(next).length * 2 > LIMITS.bytes) return false;
+        this.data = next;
+        this.persist();
+        return true;
+      };
+      return this.locks?.request ? this.locks.request(LEARNING_KEY, commit) : commit();
+    }
     async record(summary, accept = () => true) {
       const commit = () => {
         if (!accept()) return false;
@@ -2290,6 +2446,8 @@
           this.data.history.push({ ...summary, date: Date.now() });
           this.data.history = this.data.history.slice(-LIMITS.history);
           this.data.seen = [...this.data.seen, summary.id].slice(-LIMITS.seen);
+          while (JSON.stringify(this.data).length * 2 > LIMITS.bytes && this.data.coaching.length)
+            this.data.coaching.shift();
           this.data = validateModel(JSON.stringify(this.data));
           this.persist();
           return true;
@@ -2334,6 +2492,10 @@
         wins: this.data.wins,
         bytes: JSON.stringify(this.data).length * 2,
         contexts: this.data.contexts.length,
+        coachingSamples: this.data.coaching.reduce(
+          (sum, row) => sum + Object.values(row.stats).reduce((n, stat) => n + stat.count, 0),
+          0
+        ),
         warning: this.warning,
         rows,
         recent: this.data.history.slice(-8).reverse()
@@ -2523,6 +2685,7 @@
       return updateNuclearThreat(this, state);
     }
     investment(state, reserve, active, defensiveOnly = false) {
+      if (this.options.spending === false || this.saveGold && !defensiveOnly) return null;
       return chooseInvestment(this, state, reserve, active, defensiveOnly);
     }
     danger(state, tile, humansOnly = false) {
@@ -2541,6 +2704,7 @@
       return findHydrogenTarget(this, state);
     }
     nuclear(state, active) {
+      if (this.options.spending === false) return null;
       return chooseNuclearStrike(this, state, active);
     }
   };
@@ -2561,6 +2725,41 @@
       this.commands = 0;
       this.learning = learning;
       this.stopped = false;
+      this.adapter.spendingAllowed = () => this.options.spending !== false;
+    }
+    observeManual() {
+      if (this.observedBridge === this.adapter.bridge) return;
+      this.restoreManual?.();
+      this.observedBridge = this.adapter.bridge;
+      this.restoreManual = this.adapter.bridge?.observeManual?.(
+        (kind, event) => this.teach(kind, event)
+      );
+    }
+    teach(kind, event = {}) {
+      if (!this.running || this.stopped || !this.options.learning || !this.learning?.store) return;
+      if (this.adapter.game) this.learning.assist?.(this.adapter.game);
+      const state = coachingState(this.adapter.game);
+      if (!state) return;
+      const sample2 = lesson(kind, event, state);
+      if (!sample2) return;
+      const key = contextKey(state.game, this.options) + ":" + state.key;
+      const generation = this.learning.generation;
+      const accept = () => this.running && !this.stopped && this.adapter.game === state.game && this.options.learning && this.learning.generation === generation;
+      this.epoch++;
+      this.pending = null;
+      this.adapter.lastMap = null;
+      this.learning.assist?.(state.game);
+      this.learning.store.teach(key, sample2, accept).then((saved) => {
+        if (saved && accept())
+          this.learning.notify(
+            "Manual guidance learned: " + sample2.label + ". Preferences adapt after repeated examples; safety rules still apply."
+          );
+      }).catch(() => {
+      });
+      if (kind === "build" || kind === "upgrade") {
+        this.learning.store.teach(key, { label: "spend", value: 1 }, accept).catch(() => {
+        });
+      }
     }
     start({ explicit = false } = {}) {
       if (this.stopped && !explicit) return;
@@ -2576,6 +2775,7 @@
       this.game = this.adapter.game;
       this.epoch++;
       this.running = true;
+      this.observeManual();
       this.stopped = false;
       this.pending = null;
       this.lastTick = null;
@@ -2597,6 +2797,9 @@
       this.stopped = true;
       this.epoch++;
       this.pending = null;
+      this.restoreManual?.();
+      this.restoreManual = null;
+      this.observedBridge = null;
       try {
         this.learning?.abort();
       } catch {
@@ -2621,6 +2824,7 @@
             this.pending = null;
             this.lastTick = null;
             this.strategy = new Strategy(this.adapter, this.options);
+            this.observeManual();
             this.report({
               status: "waiting",
               message: "New match detected; attaching automatically."
@@ -2664,6 +2868,25 @@
         }
         this.report({ status: "running", snapshot: state, commands: this.commands });
         if (this.learning) this.strategy.tuning = this.learning.begin(state, this.options);
+        this.strategy.saveGold = false;
+        if (this.options.learning && this.learning?.store) {
+          const view = coachingState(state.game);
+          if (view) {
+            const key = contextKey(state.game, this.options) + ":" + view.key;
+            const stats = this.learning.store.data.coaching.find((r) => r.key === key)?.stats;
+            this.strategy.tuning = coachedTuning(this.strategy.tuning, stats);
+            this.savingWindows ??= /* @__PURE__ */ new Map();
+            if (this.savingGame !== state.game) {
+              this.savingGame = state.game;
+              this.savingWindows.clear();
+            }
+            if (prefersSaving(stats)) {
+              if (!this.savingWindows.has(key)) this.savingWindows.set(key, state.tick);
+              this.strategy.saveGold = state.tick - this.savingWindows.get(key) < 300;
+            }
+          }
+        }
+        this.report({ status: "running", savingGold: this.strategy.saveGold });
         if (this.pending) {
           if (this.adapter.confirmed(state, this.pending)) {
             this.report({
@@ -2692,7 +2915,9 @@
           this.report({ status: "running", message: action.reason });
           return;
         }
-        const sent = await this.adapter.execute(state, action, active);
+        const permitted = () => active() && (action.kind !== "build" || this.options.spending !== false);
+        if (!permitted()) return;
+        const sent = await this.adapter.execute(state, action, permitted);
         if (!active()) return;
         if (sent) {
           this.pending = sent;
@@ -2821,6 +3046,7 @@
       this.onChange = onChange;
       this.run = null;
       this.seenGames = /* @__PURE__ */ new WeakSet();
+      this.assistedGames = /* @__PURE__ */ new WeakSet();
       this.message = "Learning is ready. Start a match to collect a result.";
       this.lastSave = Promise.resolve();
       this.generation = 0;
@@ -2864,6 +3090,7 @@
         running: true,
         done: false,
         excluded: "",
+        assisted: this.assistedGames.has(g) || options.spending === false,
         restore: null
       };
       if (run.id.length > 100) {
@@ -2933,6 +3160,10 @@
     command() {
       if (this.run && !this.run.done) this.run.commands++;
     }
+    assist(game = this.run?.game) {
+      if (game) this.assistedGames.add(game);
+      if (this.run?.game === game && !this.run.done) this.run.assisted = true;
+    }
     invalidate(reason) {
       if (!this.run || this.run.done || this.run.excluded) return;
       this.run.excluded = reason;
@@ -2955,7 +3186,8 @@
         reward,
         territory,
         id: r.id,
-        context: r.context,
+        context: r.assisted ? r.context + "|assisted" : r.context,
+        assisted: r.assisted === true,
         variant: r.variant.id,
         win,
         ticks: r.totalTicks,
@@ -2967,7 +3199,7 @@
       this.lastSave = this.store.record(summary, accept).then((saved) => {
         if (!accept()) return;
         this.notify(
-          saved ? `${win ? "Win" : "Loss"} learned \xB7 reward ${(reward * 100).toFixed(1)}/100${territory ? ` \xB7 peak land ${(territory.peakShare * 100).toFixed(1)}%` : " \xB7 territory unavailable"}.` : "This match was already learned; it was not counted twice."
+          saved ? `${r.assisted ? "Assisted " : ""}${win ? "win" : "loss"} learned \xB7 reward ${(reward * 100).toFixed(1)}/100${territory ? ` \xB7 peak land ${(territory.peakShare * 100).toFixed(1)}%` : " \xB7 territory unavailable"}.` : "This match was already learned; it was not counted twice."
         );
       }).catch(() => {
         if (accept()) this.notify("The result could not be saved. Previous learning is preserved.");
@@ -3004,7 +3236,7 @@
       const saved = JSON.parse(localStorage.getItem(KEY) || "{}");
       if (["cautious", "balanced", "aggressive"].includes(saved.profile))
         options.profile = saved.profile;
-      for (const k of ["economy", "navy", "nukes", "learning", "diplomacy"])
+      for (const k of ["economy", "navy", "nukes", "learning", "diplomacy", "spending"])
         if (typeof saved[k] === "boolean") options[k] = saved[k];
     } catch {
     }
@@ -3040,7 +3272,7 @@
       $("#learn-count").textContent = info.total;
       $("#learn-message").textContent = info.message;
       $("#learn-current").textContent = info.variant ? "Match trial: " + info.variant : "Seven strategy variants; no game recordings.";
-      $("#learn-memory").textContent = `${info.wins} wins learned \xB7 ${(info.bytes / 1024).toFixed(1)} / 64 KiB \xB7 ${info.contexts} match types`;
+      $("#learn-memory").textContent = `${info.wins} wins learned \xB7 ${(info.bytes / 1024).toFixed(1)} / 64 KiB \xB7 ${info.contexts} match types \xB7 ${info.coachingSamples ?? 0} coaching examples`;
       const recent = info.recent[0];
       $("#learn-reward").textContent = recent ? `Last match score: ${(recent.reward * 100).toFixed(1)}/100${recent.territory ? ` \xB7 peak ${(recent.territory.peakShare * 100).toFixed(1)}% \xB7 average ${(recent.territory.averageShare * 100).toFixed(1)}% land` : " \xB7 no territory data"}` : "";
       $("#learn-warning").textContent = info.warning;
@@ -3066,6 +3298,8 @@
         $("#state").textContent = update.status;
         $(".dot").className = "dot " + update.status;
         if (update.message) $("#message").textContent = update.message;
+        if (update.savingGold !== void 0)
+          $("#coach-status").textContent = update.savingGold ? "Learned saving preference: postponing routine purchases (up to 30 seconds)." : "Manual guidance adapts troop sends, city/income balance and saving preferences.";
         if (update.snapshot) {
           const s = update.snapshot;
           $("#compatibility").textContent = controller.options.diplomacy && !controller.adapter.bridge.supports("alliance") ? "Alliance automation is unavailable in this game client. Handle requests manually." : "";
@@ -3144,6 +3378,21 @@
       }
     };
     root.addEventListener("change", save);
+    const renderSpending = () => {
+      const enabled = controller.options.spending !== false;
+      $("#spending").textContent = enabled ? "Bot spending: ON \u2014 click to save gold" : "Bot spending: OFF \u2014 click to allow";
+      $("#spending").setAttribute("aria-pressed", String(enabled));
+    };
+    renderSpending();
+    $("#spending").addEventListener("click", () => {
+      controller.options.spending = controller.options.spending === false;
+      controller.teach(controller.options.spending ? "spend" : "save");
+      renderSpending();
+      try {
+        localStorage.setItem(KEY, JSON.stringify(controller.options));
+      } catch {
+      }
+    });
     $("#learn-export").addEventListener("click", () => {
       const url = URL.createObjectURL(
         new Blob([learningStore.export()], { type: "application/json" })

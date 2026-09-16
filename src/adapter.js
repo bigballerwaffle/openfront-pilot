@@ -270,6 +270,7 @@ export class GameAdapter {
       ourPlayer = game.myPlayer();
     const valid = () =>
       stillRunning() &&
+      (action.kind !== 'build' || this.spendingAllowed?.() !== false) &&
       this.sameGame(game) &&
       ourPlayer === game.myPlayer() &&
       ourPlayer.isAlive() &&

@@ -273,7 +273,7 @@ export function createPanel(document) {
         <div class="mark">P</div>
         <div>
           <h1>OpenFront Pilot</h1>
-          <div class="version">LOCAL STRATEGY BOT · v0.12.0</div>
+          <div class="version">LOCAL STRATEGY BOT · v0.13.0</div>
         </div>
         <div class="spacer"></div>
         <button class="icon collapse" aria-label="Collapse panel" title="Collapse">−</button>
@@ -307,6 +307,16 @@ export function createPanel(document) {
         <div class="setting">
           <label for="economy">Build & upgrade</label><input type="checkbox" id="economy" checked />
         </div>
+        <button id="spending" type="button" aria-pressed="true">
+          Bot spending: ON — click to save gold
+        </button>
+        <p class="learning-copy">
+          OFF blocks all bot gold purchases. Only you can turn it back on. Manual purchases still
+          work.
+        </p>
+        <p class="learning-copy" id="coach-status">
+          Manual guidance is learned while the pilot and learning are on.
+        </p>
         <div class="setting">
           <label for="navy">Naval expansion</label><input type="checkbox" id="navy" checked />
         </div>

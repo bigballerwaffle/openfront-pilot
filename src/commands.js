@@ -47,6 +47,12 @@ export async function executeAttack(adapter, state, action, ourPlayer, valid) {
   if (action.kind === 'attack' && !can.canAttack) return null;
   if (
     action.kind === 'boat' &&
+    adapter.spendingAllowed?.() === false &&
+    can.buildableUnits.some((b) => b.type === U.transport && number(b.cost) > 0)
+  )
+    return null;
+  if (
+    action.kind === 'boat' &&
     !can.buildableUnits.some((b) => b.type === U.transport && b.canBuild !== false)
   )
     return null;

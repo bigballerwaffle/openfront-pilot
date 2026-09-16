@@ -278,6 +278,7 @@ export class Strategy {
     return updateNuclearThreat(this, state);
   }
   investment(state, reserve, active, defensiveOnly = false) {
+    if (this.options.spending === false || (this.saveGold && !defensiveOnly)) return null;
     return chooseInvestment(this, state, reserve, active, defensiveOnly);
   }
   danger(state, tile, humansOnly = false) {
@@ -296,6 +297,7 @@ export class Strategy {
     return findHydrogenTarget(this, state);
   }
   nuclear(state, active) {
+    if (this.options.spending === false) return null;
     return chooseNuclearStrike(this, state, active);
   }
 }
