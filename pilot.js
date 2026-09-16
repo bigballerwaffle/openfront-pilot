@@ -1,4 +1,4 @@
-// OpenFront Pilot 0.10.0 — locally running strategy bot. See README.md.
+// OpenFront Pilot 0.12.0 — locally running strategy bot. See README.md.
 (() => {
   // src/panel.js
   function createPanel(document2) {
@@ -276,7 +276,7 @@
         <div class="mark">P</div>
         <div>
           <h1>OpenFront Pilot</h1>
-          <div class="version">LOCAL STRATEGY BOT \xB7 v0.10.0</div>
+          <div class="version">LOCAL STRATEGY BOT \xB7 v0.12.0</div>
         </div>
         <div class="spacer"></div>
         <button class="icon collapse" aria-label="Collapse panel" title="Collapse">\u2212</button>
@@ -406,17 +406,37 @@
     stop() {
       this.epoch++;
       this.navigating = false;
+      this.unspawnable = null;
       try {
         this.storage.removeItem(REQUEUE_KEY);
       } catch {
       }
     }
-    async step(active) {
+    recover(active) {
+      if (!active() || this.navigating) return;
+      this.storage.setItem(REQUEUE_KEY, JSON.stringify({ expires: Date.now() + 12e4 }));
+      this.navigating = true;
+      try {
+        this.navigate("/");
+      } catch (error) {
+        this.navigating = false;
+        this.storage.removeItem(REQUEUE_KEY);
+        throw error;
+      }
+    }
+    async step(active, now = Date.now()) {
       if (this.busy || this.navigating) return this.busy || this.navigating;
       const g = this.adapter.game, me = g?.myPlayer(), config = g?.config();
-      if (!active() || !g || config.isReplay?.() || config.isIntentionalSpectator?.() || g.inSpawnPhase())
+      if (!active() || !g || config?.isReplay?.() || g.isCatchingUp?.() || g.inSpawnPhase() && !config?.isIntentionalSpectator?.()) {
+        this.unspawnable = null;
         return false;
-      if (!g.gameOver?.() && !(me?.hasSpawned?.() && !me.isAlive())) return false;
+      }
+      const spectator = config?.isIntentionalSpectator?.() || !me || me.hasSpawned?.() === false;
+      if (spectator) {
+        if (this.unspawnable?.game !== g) this.unspawnable = { game: g, since: now };
+      } else this.unspawnable = null;
+      const stranded = this.unspawnable && now - this.unspawnable.since >= 15e3;
+      if (!g.gameOver?.() && !(me?.hasSpawned?.() && !me.isAlive()) && !stranded) return false;
       this.busy = true;
       const epoch = this.epoch;
       try {
@@ -432,9 +452,7 @@
           clearTimeout(timer);
         }
         if (!active() || this.epoch !== epoch || !this.adapter.sameGame(g)) return true;
-        this.storage.setItem(REQUEUE_KEY, JSON.stringify({ expires: Date.now() + 12e4 }));
-        this.navigating = true;
-        this.navigate("/");
+        this.recover(active);
         return true;
       } finally {
         this.busy = false;
@@ -463,6 +481,7 @@
   var MIN_HUMAN_ATTACK_RATIO = 1.67;
   var MIN_AI_ATTACK_RATIO = 1.3;
   var MAX_TROOP_SEND_FRACTION = 0.72;
+  var NAVAL = Object.freeze({ wildernessShare: 0.1, wildernessMinimum: 1e3 });
   var COOLDOWNS = Object.freeze({
     attack: 12,
     counter: 12,
@@ -607,10 +626,16 @@
     return Math.min(90, value * fraction);
   }
   function factoryConnections(state, tile) {
+    return ownedRailConnections(state, tile, [U.city, U.port]);
+  }
+  function cityFactoryConnections(state, tile) {
+    return ownedRailConnections(state, tile, [U.factory]);
+  }
+  function ownedRailConnections(state, tile, types) {
     const game = state.game, range = state.config.trainStationMaxRange?.() ?? 110;
     if (!game.x || !game.y || !game.ref || !game.isValidCoord) return 0;
     return state.own.filter(
-      (unit) => [U.city, U.port].includes(unit.type) && !unit.building && unit.tile !== tile && game.ownerID(unit.tile) === state.me.smallID() && game.euclideanDistSquared(tile, unit.tile) <= range * range
+      (unit) => types.includes(unit.type) && !unit.building && Number.isInteger(unit.tile) && unit.tile !== tile && game.ownerID(unit.tile) === state.me.smallID() && game.euclideanDistSquared(tile, unit.tile) <= range * range
     ).reduce((sum, unit) => {
       const dx = game.x(unit.tile) - game.x(tile), dy = game.y(unit.tile) - game.y(tile), steps = Math.ceil(Math.hypot(dx, dy));
       for (let i = 1; i < steps; i++) {
@@ -846,21 +871,32 @@
 
   // src/setup.js
   var LobbyStarter = class {
-    constructor(adapter, report, ready) {
+    constructor(adapter, report, ready, recover = () => {
+    }) {
       this.adapter = adapter;
       this.report = report;
       this.ready = ready;
+      this.recover = recover;
+      this.epoch = 0;
       this.active = false;
       this.attempted = null;
+      this.waitSince = null;
+      this.retryAt = 0;
+      this.failedLobby = null;
     }
     start() {
+      this.epoch++;
       this.active = true;
       this.attempted = null;
+      this.waitSince = null;
+      this.retryAt = 0;
+      this.failedLobby = null;
     }
     stop() {
+      this.epoch++;
       this.active = false;
     }
-    step() {
+    step(now = Date.now()) {
       if (!this.active) return;
       if (this.adapter.connect() && !this.adapter.game.gameOver?.()) {
         if (this.adapter.game.config().gameConfig?.().gameMode !== "Free For All") {
@@ -874,16 +910,31 @@
         return;
       }
       const selector = this.adapter.document.querySelector("game-mode-selector");
+      if (this.waitSince !== null && now - this.waitSince >= 9e4) {
+        this.epoch++;
+        this.failedLobby = this.attempted;
+        this.waitSince = null;
+        this.attempted = null;
+        this.retryAt = now + 5e3;
+        this.report({
+          status: "waiting",
+          message: "Lobby loading timed out. Recovering the next FFA entry."
+        });
+        if (!selector || selector.inLobby) return this.recover();
+      }
+      if (now < this.retryAt) return;
       if (!selector || selector.inLobby || this.attempted) {
+        this.waitSince ??= now;
         this.report({
           status: "waiting",
           message: this.attempted ? "Waiting for the FFA lobby and map to load." : "Waiting for the OpenFront homepage."
         });
         return;
       }
-      const lobby = selector.lobbies?.games?.ffa?.find(
+      const eligible = selector.lobbies?.games?.ffa?.filter(
         (l) => l.gameConfig?.gameMode === "Free For All" && (!l.gameConfig.maxPlayers || l.numClients < l.gameConfig.maxPlayers) && (!l.gameConfig.trusted || selector.viewerTrusted)
       );
+      const lobby = eligible?.find((l) => l.gameID !== this.failedLobby) ?? eligible?.[0];
       if (!lobby) {
         this.report({
           status: "waiting",
@@ -899,11 +950,32 @@
         return;
       }
       this.attempted = lobby.gameID;
-      selector.validateAndJoin(lobby);
+      this.waitSince = now;
+      const epoch = ++this.epoch;
+      const failed = () => {
+        if (!this.active || this.epoch !== epoch) return;
+        this.failedLobby = lobby.gameID;
+        this.attempted = null;
+        this.retryAt = Date.now() + 5e3;
+        this.report({
+          status: "waiting",
+          message: "Lobby join failed. Retrying through the normal game menu shortly."
+        });
+      };
       this.report({
         status: "waiting",
         message: "FFA join requested. Waiting for connection and map loading; complete any prompt shown by the game."
       });
+      try {
+        const result = selector.validateAndJoin(lobby);
+        if (result === false) failed();
+        else if (result?.then)
+          Promise.resolve(result).then((value) => {
+            if (value === false) failed();
+          }, failed);
+      } catch {
+        failed();
+      }
     }
   };
 
@@ -1505,6 +1577,7 @@
         }
     }
     const budget = Math.min(state.troops - reserve, state.troops * strategy.tuning.attack);
+    if (!Number.isFinite(budget) || budget < 100) return null;
     const nearbyAI = [...candidates].some((t) => {
       const player = game.owner(t);
       return player.isPlayer() && isAI(player);
@@ -1532,10 +1605,17 @@
           kind: "boat",
           targetID: c.owner.id(),
           tile: c.tile,
-          troops: Math.floor(budget),
+          // Empty land needs a foothold, not the entire invasion budget. Keep
+          // defended landings concentrated and never relax the crossing checks.
+          troops: Math.floor(
+            c.owner.isPlayer() ? budget : Math.min(
+              budget,
+              Math.max(NAVAL.wildernessMinimum, state.troops * NAVAL.wildernessShare)
+            )
+          ),
           reserve,
           minRatio: strategy.strengthRatio(),
-          reason: "Concentrated landing: direct water corridor clear of current hostile warship range."
+          reason: c.owner.isPlayer() ? "Concentrated landing: direct water corridor clear of current hostile warship range." : "Small wilderness foothold: preserve troops at home while crossing a clear water corridor."
         };
     }
     return null;
@@ -1686,7 +1766,7 @@
         ) : 0;
         return Math.min(danger, 90) + Math.min(near, 65) + Math.min(route / 12, 60) - (same ? same.level * 10 : 0);
       }
-      return Math.min(danger, 110) + shore + Math.min(near, 75) + (terrainRank(game.terrainType?.(t)) ?? 0) * 12 - (same ? same.level * 12 : 0);
+      return Math.min(danger, 110) + shore + Math.min(near, 75) + (type === U.city ? Math.min(3, cityFactoryConnections(state, t)) * 15 : 0) + (terrainRank(game.terrainType?.(t)) ?? 0) * 12 - (same ? same.level * 12 : 0);
     };
     return tiles.filter(
       (t) => game.ownerID(t) === state.me.smallID() && game.isLand(t) && !game.hasFallout?.(t)
@@ -1738,6 +1818,17 @@
       (player2) => player2.id() !== target && (friendly(state.me, player2) || state.me.isRequestingAllianceWith?.(player2))
     ).length;
     const room = (player2) => friendly(state.me, player2) || state.me.isRequestingAllianceWith?.(player2) || occupied < limit;
+    if (strategy.adapter.bridge.supports("extend") && !strategy.cooldown("extend", state.tick, COOLDOWNS.diplomacy)) {
+      const renewal = [...state.me.alliances?.() ?? []].filter(
+        (a) => wanted.has(a.other) && a.expiresAt > state.tick && a.expiresAt - state.tick <= (state.config.allianceExtensionPromptOffset?.() ?? 300) && !strategy.cooldown(`diplomacy:${a.other}`, state.tick, COOLDOWNS.allianceRenewal)
+      ).sort((a, b) => a.expiresAt - b.expiresAt)[0];
+      if (renewal)
+        return {
+          kind: "extend",
+          targetID: renewal.other,
+          reason: "Renew the soonest-expiring useful flank before handling new offers."
+        };
+    }
     for (const player2 of state.players) {
       if (!player2.isRequestingAllianceWith?.(state.me) || strategy.cooldown(`diplomacy:${player2.id()}`, state.tick, COOLDOWNS.allianceResponse))
         continue;
@@ -1751,16 +1842,6 @@
     }
     if (strategy.cooldown("alliance", state.tick, COOLDOWNS.diplomacy) || strategy.cooldown("extend", state.tick, COOLDOWNS.diplomacy))
       return null;
-    if (strategy.adapter.bridge.supports("extend"))
-      for (const a of state.me.alliances?.() ?? []) {
-        if (!wanted.has(a.other) || a.expiresAt - state.tick > (state.config.allianceExtensionPromptOffset?.() ?? 300) || strategy.cooldown(`diplomacy:${a.other}`, state.tick, COOLDOWNS.allianceRenewal))
-          continue;
-        return {
-          kind: "extend",
-          targetID: a.other,
-          reason: "Extend a useful flank alliance; let unnecessary alliances expire."
-        };
-      }
     if (!strategy.adapter.bridge.supports("alliance") || occupied >= limit) return null;
     const player = eligible.find(
       (player2) => !friendly(state.me, player2) && !state.me.isRequestingAllianceWith?.(player2) && !strategy.cooldown(`diplomacy:${player2.id()}`, state.tick, COOLDOWNS.allianceOffer)
@@ -2109,7 +2190,7 @@
     const part = (x) => String(x ?? "unknown").replace(/[|]/g, "_").slice(0, 24);
     const custom = Boolean(config.infiniteGold || config.infiniteTroops || config.instantBuild);
     return [
-      "conquest-v10-flanks",
+      "conquest-v12-early-navy",
       config.gameType,
       config.gameMode,
       config.difficulty,
@@ -2372,6 +2453,12 @@
         const strike = await this.nuclear(state, active);
         if (!active()) return null;
         if (strike) return strike;
+      }
+      const age = state.game.ticksSinceStart?.();
+      if (Number.isFinite(age) && age >= 0 && age < EARLY_GAME_TICKS && this.options.navy && !humanIncoming.length && !state.immunized && this.adapter.bridge.supports("boat") && !this.cooldown("boat", state.tick, COOLDOWNS.navalLanding) && !(state.allOutgoing ?? state.outgoing).length && !state.own.some((unit) => unit.type === U.transport) && state.troops > reserve + 1e3) {
+        const boat = await this.landing(state, reserve, active);
+        if (!active()) return null;
+        if (boat) return boat;
       }
       if (this.options.economy && !this.cooldown("build", state.tick, COOLDOWNS.routineBuild)) {
         const build = await this.investment(state, reserve, active);
@@ -3013,7 +3100,8 @@
       () => {
         controller.start({ explicit: true });
         return controller.running;
-      }
+      },
+      () => requeue.recover(() => starter.active && !controller.stopped)
     );
     const requeue = new AutoRequeue(
       controller.adapter,
@@ -3028,7 +3116,7 @@
     );
     const tick = async () => {
       try {
-        if (starter.active) starter.step();
+        if (starter.active) await starter.step();
         else if (controller.running && await requeue.step(() => controller.running && !controller.stopped))
           return;
         else await controller.step();

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OpenFront Pilot",
-  "version": "0.10.0",
+  "version": "0.12.0",
   "description": "A local OpenFront strategy bot with automatic FFA setup, persistent control and an emergency stop.",
   "minimum_chrome_version": "111",
   "content_scripts": [{

@@ -1,5 +1,5 @@
 import { DEFENSE, COOLDOWNS, NUCLEAR } from '../rules.js';
-import { factoryConnections, terrainRank } from '../opportunities.js';
+import { factoryConnections, cityFactoryConnections, terrainRank } from '../opportunities.js';
 import { isAI, humanAttacks, safePlacement, defenseUseful, earlyCapacity } from '../safety.js';
 import { unitsOf, U, STRUCTURES, sample, number } from '../common.js';
 
@@ -225,6 +225,7 @@ export function rankBuildingSites(strategy, state, type) {
       Math.min(danger, 110) +
       shore +
       Math.min(near, 75) +
+      (type === U.city ? Math.min(3, cityFactoryConnections(state, t)) * 15 : 0) +
       (terrainRank(game.terrainType?.(t)) ?? 0) * 12 -
       (same ? same.level * 12 : 0)
     );

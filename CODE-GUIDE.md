@@ -99,4 +99,4 @@ npm test
 
 Build before testing so the panel tests exercise the current bundle. Reload the extension and refresh OpenFront to use it in the browser. `npm run format:check` checks formatting without changing files.
 
-This refactor keeps v0.10.0's gameplay rules, learning context, saved-data keys, and public strategy entry points. The existing behavioral tests cover those rules; they do not measure live multiplayer win rate.
+The original refactor preserved v0.10.0 behavior. The subsequent v0.11.0 strategy changes are documented in `STRATEGY-REVIEW-V11.md`; public entry points and saved-data keys remain stable, with a separate learning context for the new rules. Behavioral tests do not measure live multiplayer win rate.

@@ -10,6 +10,24 @@ function page() {
   dom.window.eval(bundle);
   return { dom, window: dom.window, root: dom.window.document.querySelector('openfront-pilot').shadowRoot };
 }
+
+test('bundled lobby retry stays armed and Stop cancels later retries', async () => {
+  const { dom, window, root } = page(); let callback, now = 1000, joins = 0;
+  window.Date.now = () => now;
+  window.setInterval = fn => { callback = fn; return 1; };
+  window.clearInterval = () => {};
+  try {
+    const selector = window.document.createElement('game-mode-selector');
+    selector.lobbies = { games: { ffa: [{ gameID: 'test', gameConfig: { gameMode: 'Free For All' } }] } };
+    selector.validateAndJoin = () => { joins++; return false; };
+    window.document.body.append(selector);
+    root.querySelector('.start').click(); assert.equal(joins, 1);
+    await callback(); assert.equal(joins, 1);
+    now += 5000; await callback(); assert.equal(joins, 2);
+    root.querySelector('.stop').click();
+    now += 100000; await callback(); assert.equal(joins, 2);
+  } finally { dom.window.close(); }
+});
 test('bundled panel enables learning by default, persists settings, and ignores O while typing', () => {
   const { dom, window, root } = page();
   try {

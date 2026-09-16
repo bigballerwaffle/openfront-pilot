@@ -129,6 +129,7 @@ function boot() {
       controller.start({ explicit: true });
       return controller.running;
     },
+    () => requeue.recover(() => starter.active && !controller.stopped),
   );
   const requeue = new AutoRequeue(
     controller.adapter,
@@ -143,7 +144,7 @@ function boot() {
   );
   const tick = async () => {
     try {
-      if (starter.active) starter.step();
+      if (starter.active) await starter.step();
       else if (
         controller.running &&
         (await requeue.step(() => controller.running && !controller.stopped))

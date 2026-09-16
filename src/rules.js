@@ -24,6 +24,7 @@ export const STRUCTURE_DANGER_RADIUS = 28;
 export const MIN_HUMAN_ATTACK_RATIO = 1.67;
 export const MIN_AI_ATTACK_RATIO = 1.3;
 export const MAX_TROOP_SEND_FRACTION = 0.72;
+export const NAVAL = Object.freeze({ wildernessShare: 0.1, wildernessMinimum: 1000 });
 
 export const COOLDOWNS = Object.freeze({
   attack: 12,

@@ -18,7 +18,15 @@ The extension starts paused. Start authorizes continuous play: after a match end
 **Alt-Tab and changing tabs do not stop it.** Keep the game tab open; closing/reloading the page, browser suspension and computer sleep can still interrupt any page script. Escape works while the game tab has keyboard focus, not system-wide. Stopping does not undo commands already accepted by the game. The panel can be dragged or collapsed.
 
 
-## Strategy in v0.10.0
+## Strategy in v0.12.0
+
+This revision adds failed-lobby recovery, departure from unspawnable spectator sessions, and earlier naval opportunities. During the first ten minutes, safe landings can precede routine building and new land attacks even with adjacent wilderness or enemies. Defense, committed conquests, spawn immunity, troop reserves, transport cooldowns and crossing safety still take priority. At high opening capacity, available land expansion retains priority.
+
+The preceding revision followed ten additional Enzo videos reviewed through available transcripts and sampled gameplay scenes. See [the source and implementation notes](STRATEGY-REVIEW-V11.md) for limitations and tactics deliberately not copied.
+
+- **Timely renewals:** renew the soonest-expiring useful flank before handling new offers or rejections, retaining native eligibility and cooldowns.
+- **Smaller wilderness boats:** use a 10% foothold (preferred minimum 1,000 troops, bounded by the available budget). Defended landings remain concentrated and crossing checks remain enforced.
+- **Connected cities:** favor safe city sites linked to completed own factories through owned land, without relaxing placement clearances or dispersion scoring.
 
 - **Conquest order:** expand into adjacent wilderness; conquer nearby tribes (`BOT`) and nations (`NATION`); only then consider human-player opportunities. If a neighboring AI is too strong, gather troops rather than diverting to an easier human.
 - **Finish started AI conquests first:** reinforcement now budgets for remaining territory costs as well as defending troop count. Reinforcing a committed attack and restarting an unfinished primary AI conquest take priority over routine construction and new targets.
@@ -81,7 +89,7 @@ Export/import/reset during a trial is handled without modifying game state; impo
 
 ### Updating an existing installation
 
-Update the files in your installed `openfront-pilot` folder. In `chrome://extensions`, click the reload arrow on OpenFront Pilot, then refresh the game tab. The panel should say **v0.10.0**. If you have no installation, follow the installation steps above. Updating extension files preserves learning already saved in the browser. This strategy revision starts separate variant scores so old results do not falsely rate the new rules; existing summaries remain until normal memory limits evict them. Keep only one enabled copy of the extension.
+Update the files in your installed `openfront-pilot` folder. In `chrome://extensions`, click the reload arrow on OpenFront Pilot, then refresh the game tab. The panel should say **v0.12.0**. If you have no installation, follow the installation steps above. Updating extension files preserves learning already saved in the browser. This strategy revision starts separate variant scores so old results do not falsely rate the new rules; existing summaries remain until normal memory limits evict them. Keep only one enabled copy of the extension.
 
 ## Automatic setup details
 
@@ -91,7 +99,9 @@ Starting points require an unowned, traversable radius-four land patch. Scoring 
 
 ### Continuous-match lifecycle
 
-On a confirmed game-over state or elimination of an already-spawned player, the bot first observes/finalizes the available learning result (with a bounded wait), then navigates to `/`, the game's normal exit destination. A one-use resume marker in this tab's session storage expires after two minutes and starts the next FFA entry after the homepage loads. Escape or Stop all removes that permission, including while a result is being saved. Replays, intentional spectator mode, living players and the spawn phase do not trigger cycling. Manual reloads normally start stopped; automatic match-transition reloads resume deliberately.
+On a confirmed game-over state or elimination of an already-spawned player, the bot first observes/finalizes the available learning result (with a bounded wait), then navigates to `/`, the game's normal exit destination. It also leaves after 15 continuous seconds without a spawnable player once spawning closes, or in explicitly flagged spectator mode. Normal spawn selection, replay playback and catching-up states do not trigger that timeout. A living spawned player clears it.
+
+Failed join calls retry after five seconds, preferring another eligible lobby when available. An unacknowledged join times out after 90 seconds; if the client is stuck in its lobby/loading screen, the bot returns home. All joins still use the normal validation handler; game prompts may require your input. A one-use resume marker in this tab's session storage expires after two minutes and starts the next FFA entry after the homepage loads. Escape or Stop all removes that permission, including while a result is being saved. Manual reloads normally start stopped; automatic match-transition reloads resume deliberately.
 
 ## Files and development
 
