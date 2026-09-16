@@ -200,7 +200,7 @@ export function contextKey(game, options) {
       .slice(0, 24);
   const custom = Boolean(config.infiniteGold || config.infiniteTroops || config.instantBuild);
   return [
-    'conquest-v10-flanks',
+    'conquest-v11-renewals-networks',
     config.gameType,
     config.gameMode,
     config.difficulty,

@@ -88,6 +88,28 @@ export function chooseDiplomacy(strategy, state, proposed) {
   ).length;
   const room = (player) =>
     friendly(state.me, player) || state.me.isRequestingAllianceWith?.(player) || occupied < limit;
+  // Preserve an expiring flank before processing a queue of new offers (or
+  // rejections). Renew the soonest expiry first, not the array's first ally.
+  if (
+    strategy.adapter.bridge.supports('extend') &&
+    !strategy.cooldown('extend', state.tick, COOLDOWNS.diplomacy)
+  ) {
+    const renewal = [...(state.me.alliances?.() ?? [])]
+      .filter(
+        (a) =>
+          wanted.has(a.other) &&
+          a.expiresAt > state.tick &&
+          a.expiresAt - state.tick <= (state.config.allianceExtensionPromptOffset?.() ?? 300) &&
+          !strategy.cooldown(`diplomacy:${a.other}`, state.tick, COOLDOWNS.allianceRenewal),
+      )
+      .sort((a, b) => a.expiresAt - b.expiresAt)[0];
+    if (renewal)
+      return {
+        kind: 'extend',
+        targetID: renewal.other,
+        reason: 'Renew the soonest-expiring useful flank before handling new offers.',
+      };
+  }
   for (const player of state.players) {
     if (
       !player.isRequestingAllianceWith?.(state.me) ||
@@ -110,20 +132,6 @@ export function chooseDiplomacy(strategy, state, proposed) {
     strategy.cooldown('extend', state.tick, COOLDOWNS.diplomacy)
   )
     return null;
-  if (strategy.adapter.bridge.supports('extend'))
-    for (const a of state.me.alliances?.() ?? []) {
-      if (
-        !wanted.has(a.other) ||
-        a.expiresAt - state.tick > (state.config.allianceExtensionPromptOffset?.() ?? 300) ||
-        strategy.cooldown(`diplomacy:${a.other}`, state.tick, COOLDOWNS.allianceRenewal)
-      )
-        continue;
-      return {
-        kind: 'extend',
-        targetID: a.other,
-        reason: 'Extend a useful flank alliance; let unnecessary alliances expire.',
-      };
-    }
   if (!strategy.adapter.bridge.supports('alliance') || occupied >= limit) return null;
   const player = eligible.find(
     (player) =>

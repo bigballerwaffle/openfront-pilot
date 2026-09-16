@@ -36,14 +36,25 @@ export function captureValue(state, enemy, forecast) {
 // range, with a continuous owned land corridor. Native build validation remains
 // authoritative; this does not claim to simulate the railroad pathfinder.
 export function factoryConnections(state, tile) {
+  return ownedRailConnections(state, tile, [U.city, U.port]);
+}
+
+// Cities are stations too: favor extending a protected OWN network, without
+// assuming that proximity to a foreign factory guarantees reciprocal income.
+export function cityFactoryConnections(state, tile) {
+  return ownedRailConnections(state, tile, [U.factory]);
+}
+
+function ownedRailConnections(state, tile, types) {
   const game = state.game,
     range = state.config.trainStationMaxRange?.() ?? 110;
   if (!game.x || !game.y || !game.ref || !game.isValidCoord) return 0;
   return state.own
     .filter(
       (unit) =>
-        [U.city, U.port].includes(unit.type) &&
+        types.includes(unit.type) &&
         !unit.building &&
+        Number.isInteger(unit.tile) &&
         unit.tile !== tile &&
         game.ownerID(unit.tile) === state.me.smallID() &&
         game.euclideanDistSquared(tile, unit.tile) <= range * range,

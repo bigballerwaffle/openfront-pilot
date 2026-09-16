@@ -1,4 +1,4 @@
-// OpenFront Pilot 0.10.0 — locally running strategy bot. See README.md.
+// OpenFront Pilot 0.11.0 — locally running strategy bot. See README.md.
 (() => {
   // src/panel.js
   function createPanel(document2) {
@@ -276,7 +276,7 @@
         <div class="mark">P</div>
         <div>
           <h1>OpenFront Pilot</h1>
-          <div class="version">LOCAL STRATEGY BOT \xB7 v0.10.0</div>
+          <div class="version">LOCAL STRATEGY BOT \xB7 v0.11.0</div>
         </div>
         <div class="spacer"></div>
         <button class="icon collapse" aria-label="Collapse panel" title="Collapse">\u2212</button>
@@ -463,6 +463,7 @@
   var MIN_HUMAN_ATTACK_RATIO = 1.67;
   var MIN_AI_ATTACK_RATIO = 1.3;
   var MAX_TROOP_SEND_FRACTION = 0.72;
+  var NAVAL = Object.freeze({ wildernessShare: 0.1, wildernessMinimum: 1e3 });
   var COOLDOWNS = Object.freeze({
     attack: 12,
     counter: 12,
@@ -607,10 +608,16 @@
     return Math.min(90, value * fraction);
   }
   function factoryConnections(state, tile) {
+    return ownedRailConnections(state, tile, [U.city, U.port]);
+  }
+  function cityFactoryConnections(state, tile) {
+    return ownedRailConnections(state, tile, [U.factory]);
+  }
+  function ownedRailConnections(state, tile, types) {
     const game = state.game, range = state.config.trainStationMaxRange?.() ?? 110;
     if (!game.x || !game.y || !game.ref || !game.isValidCoord) return 0;
     return state.own.filter(
-      (unit) => [U.city, U.port].includes(unit.type) && !unit.building && unit.tile !== tile && game.ownerID(unit.tile) === state.me.smallID() && game.euclideanDistSquared(tile, unit.tile) <= range * range
+      (unit) => types.includes(unit.type) && !unit.building && Number.isInteger(unit.tile) && unit.tile !== tile && game.ownerID(unit.tile) === state.me.smallID() && game.euclideanDistSquared(tile, unit.tile) <= range * range
     ).reduce((sum, unit) => {
       const dx = game.x(unit.tile) - game.x(tile), dy = game.y(unit.tile) - game.y(tile), steps = Math.ceil(Math.hypot(dx, dy));
       for (let i = 1; i < steps; i++) {
@@ -1505,6 +1512,7 @@
         }
     }
     const budget = Math.min(state.troops - reserve, state.troops * strategy.tuning.attack);
+    if (!Number.isFinite(budget) || budget < 100) return null;
     const nearbyAI = [...candidates].some((t) => {
       const player = game.owner(t);
       return player.isPlayer() && isAI(player);
@@ -1532,10 +1540,17 @@
           kind: "boat",
           targetID: c.owner.id(),
           tile: c.tile,
-          troops: Math.floor(budget),
+          // Empty land needs a foothold, not the entire invasion budget. Keep
+          // defended landings concentrated and never relax the crossing checks.
+          troops: Math.floor(
+            c.owner.isPlayer() ? budget : Math.min(
+              budget,
+              Math.max(NAVAL.wildernessMinimum, state.troops * NAVAL.wildernessShare)
+            )
+          ),
           reserve,
           minRatio: strategy.strengthRatio(),
-          reason: "Concentrated landing: direct water corridor clear of current hostile warship range."
+          reason: c.owner.isPlayer() ? "Concentrated landing: direct water corridor clear of current hostile warship range." : "Small wilderness foothold: preserve troops at home while crossing a clear water corridor."
         };
     }
     return null;
@@ -1686,7 +1701,7 @@
         ) : 0;
         return Math.min(danger, 90) + Math.min(near, 65) + Math.min(route / 12, 60) - (same ? same.level * 10 : 0);
       }
-      return Math.min(danger, 110) + shore + Math.min(near, 75) + (terrainRank(game.terrainType?.(t)) ?? 0) * 12 - (same ? same.level * 12 : 0);
+      return Math.min(danger, 110) + shore + Math.min(near, 75) + (type === U.city ? Math.min(3, cityFactoryConnections(state, t)) * 15 : 0) + (terrainRank(game.terrainType?.(t)) ?? 0) * 12 - (same ? same.level * 12 : 0);
     };
     return tiles.filter(
       (t) => game.ownerID(t) === state.me.smallID() && game.isLand(t) && !game.hasFallout?.(t)
@@ -1738,6 +1753,17 @@
       (player2) => player2.id() !== target && (friendly(state.me, player2) || state.me.isRequestingAllianceWith?.(player2))
     ).length;
     const room = (player2) => friendly(state.me, player2) || state.me.isRequestingAllianceWith?.(player2) || occupied < limit;
+    if (strategy.adapter.bridge.supports("extend") && !strategy.cooldown("extend", state.tick, COOLDOWNS.diplomacy)) {
+      const renewal = [...state.me.alliances?.() ?? []].filter(
+        (a) => wanted.has(a.other) && a.expiresAt > state.tick && a.expiresAt - state.tick <= (state.config.allianceExtensionPromptOffset?.() ?? 300) && !strategy.cooldown(`diplomacy:${a.other}`, state.tick, COOLDOWNS.allianceRenewal)
+      ).sort((a, b) => a.expiresAt - b.expiresAt)[0];
+      if (renewal)
+        return {
+          kind: "extend",
+          targetID: renewal.other,
+          reason: "Renew the soonest-expiring useful flank before handling new offers."
+        };
+    }
     for (const player2 of state.players) {
       if (!player2.isRequestingAllianceWith?.(state.me) || strategy.cooldown(`diplomacy:${player2.id()}`, state.tick, COOLDOWNS.allianceResponse))
         continue;
@@ -1751,16 +1777,6 @@
     }
     if (strategy.cooldown("alliance", state.tick, COOLDOWNS.diplomacy) || strategy.cooldown("extend", state.tick, COOLDOWNS.diplomacy))
       return null;
-    if (strategy.adapter.bridge.supports("extend"))
-      for (const a of state.me.alliances?.() ?? []) {
-        if (!wanted.has(a.other) || a.expiresAt - state.tick > (state.config.allianceExtensionPromptOffset?.() ?? 300) || strategy.cooldown(`diplomacy:${a.other}`, state.tick, COOLDOWNS.allianceRenewal))
-          continue;
-        return {
-          kind: "extend",
-          targetID: a.other,
-          reason: "Extend a useful flank alliance; let unnecessary alliances expire."
-        };
-      }
     if (!strategy.adapter.bridge.supports("alliance") || occupied >= limit) return null;
     const player = eligible.find(
       (player2) => !friendly(state.me, player2) && !state.me.isRequestingAllianceWith?.(player2) && !strategy.cooldown(`diplomacy:${player2.id()}`, state.tick, COOLDOWNS.allianceOffer)
@@ -2109,7 +2125,7 @@
     const part = (x) => String(x ?? "unknown").replace(/[|]/g, "_").slice(0, 24);
     const custom = Boolean(config.infiniteGold || config.infiniteTroops || config.instantBuild);
     return [
-      "conquest-v10-flanks",
+      "conquest-v11-renewals-networks",
       config.gameType,
       config.gameMode,
       config.difficulty,

@@ -18,7 +18,13 @@ The extension starts paused. Start authorizes continuous play: after a match end
 **Alt-Tab and changing tabs do not stop it.** Keep the game tab open; closing/reloading the page, browser suspension and computer sleep can still interrupt any page script. Escape works while the game tab has keyboard focus, not system-wide. Stopping does not undo commands already accepted by the game. The panel can be dragged or collapsed.
 
 
-## Strategy in v0.10.0
+## Strategy in v0.11.0
+
+This revision follows ten additional Enzo videos reviewed through available transcripts and sampled gameplay scenes. See [the source and implementation notes](STRATEGY-REVIEW-V11.md) for limitations and tactics deliberately not copied.
+
+- **Timely renewals:** renew the soonest-expiring useful flank before handling new offers or rejections, retaining native eligibility and cooldowns.
+- **Smaller wilderness boats:** use a 10% foothold (preferred minimum 1,000 troops, bounded by the available budget). Defended landings remain concentrated and crossing checks remain enforced.
+- **Connected cities:** favor safe city sites linked to completed own factories through owned land, without relaxing placement clearances or dispersion scoring.
 
 - **Conquest order:** expand into adjacent wilderness; conquer nearby tribes (`BOT`) and nations (`NATION`); only then consider human-player opportunities. If a neighboring AI is too strong, gather troops rather than diverting to an easier human.
 - **Finish started AI conquests first:** reinforcement now budgets for remaining territory costs as well as defending troop count. Reinforcing a committed attack and restarting an unfinished primary AI conquest take priority over routine construction and new targets.
@@ -81,7 +87,7 @@ Export/import/reset during a trial is handled without modifying game state; impo
 
 ### Updating an existing installation
 
-Update the files in your installed `openfront-pilot` folder. In `chrome://extensions`, click the reload arrow on OpenFront Pilot, then refresh the game tab. The panel should say **v0.10.0**. If you have no installation, follow the installation steps above. Updating extension files preserves learning already saved in the browser. This strategy revision starts separate variant scores so old results do not falsely rate the new rules; existing summaries remain until normal memory limits evict them. Keep only one enabled copy of the extension.
+Update the files in your installed `openfront-pilot` folder. In `chrome://extensions`, click the reload arrow on OpenFront Pilot, then refresh the game tab. The panel should say **v0.11.0**. If you have no installation, follow the installation steps above. Updating extension files preserves learning already saved in the browser. This strategy revision starts separate variant scores so old results do not falsely rate the new rules; existing summaries remain until normal memory limits evict them. Keep only one enabled copy of the extension.
 
 ## Automatic setup details
 

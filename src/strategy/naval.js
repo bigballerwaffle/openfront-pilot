@@ -1,5 +1,6 @@
 import { isAI, coastalTile, safeCrossing } from '../safety.js';
 import { U, sample, friendly } from '../common.js';
+import { NAVAL } from '../rules.js';
 
 export async function chooseLanding(strategy, state, reserve, active) {
   if (!state.map.shores.length) return null;
@@ -21,6 +22,7 @@ export async function chooseLanding(strategy, state, reserve, active) {
       }
   }
   const budget = Math.min(state.troops - reserve, state.troops * strategy.tuning.attack);
+  if (!Number.isFinite(budget) || budget < 100) return null;
   const nearbyAI = [...candidates].some((t) => {
     const player = game.owner(t);
     return player.isPlayer() && isAI(player);
@@ -52,11 +54,21 @@ export async function chooseLanding(strategy, state, reserve, active) {
         kind: 'boat',
         targetID: c.owner.id(),
         tile: c.tile,
-        troops: Math.floor(budget),
+        // Empty land needs a foothold, not the entire invasion budget. Keep
+        // defended landings concentrated and never relax the crossing checks.
+        troops: Math.floor(
+          c.owner.isPlayer()
+            ? budget
+            : Math.min(
+                budget,
+                Math.max(NAVAL.wildernessMinimum, state.troops * NAVAL.wildernessShare),
+              ),
+        ),
         reserve,
         minRatio: strategy.strengthRatio(),
-        reason:
-          'Concentrated landing: direct water corridor clear of current hostile warship range.',
+        reason: c.owner.isPlayer()
+          ? 'Concentrated landing: direct water corridor clear of current hostile warship range.'
+          : 'Small wilderness foothold: preserve troops at home while crossing a clear water corridor.',
       };
   }
   return null;
