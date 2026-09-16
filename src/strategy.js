@@ -28,6 +28,7 @@ import {
   MIN_HUMAN_ATTACK_RATIO,
   NEAR_CAPACITY_THRESHOLD,
   NUCLEAR,
+  EARLY_GAME_TICKS,
 } from './rules.js';
 export { DEFAULTS } from './rules.js';
 
@@ -175,6 +176,26 @@ export class Strategy {
       const strike = await this.nuclear(state, active);
       if (!active()) return null;
       if (strike) return strike;
+    }
+    // Early footholds are opportunities, not a last resort after every land
+    // border is exhausted. Keep defensive reserves and one transport at a time.
+    const age = state.game.ticksSinceStart?.();
+    if (
+      Number.isFinite(age) &&
+      age >= 0 &&
+      age < EARLY_GAME_TICKS &&
+      this.options.navy &&
+      !humanIncoming.length &&
+      !state.immunized &&
+      this.adapter.bridge.supports('boat') &&
+      !this.cooldown('boat', state.tick, COOLDOWNS.navalLanding) &&
+      !(state.allOutgoing ?? state.outgoing).length &&
+      !state.own.some((unit) => unit.type === U.transport) &&
+      state.troops > reserve + 1000
+    ) {
+      const boat = await this.landing(state, reserve, active);
+      if (!active()) return null;
+      if (boat) return boat;
     }
     if (this.options.economy && !this.cooldown('build', state.tick, COOLDOWNS.routineBuild)) {
       const build = await this.investment(state, reserve, active);

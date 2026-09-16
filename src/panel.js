@@ -273,7 +273,7 @@ export function createPanel(document) {
         <div class="mark">P</div>
         <div>
           <h1>OpenFront Pilot</h1>
-          <div class="version">LOCAL STRATEGY BOT · v0.11.0</div>
+          <div class="version">LOCAL STRATEGY BOT · v0.12.0</div>
         </div>
         <div class="spacer"></div>
         <button class="icon collapse" aria-label="Collapse panel" title="Collapse">−</button>

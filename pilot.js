@@ -1,4 +1,4 @@
-// OpenFront Pilot 0.11.0 — locally running strategy bot. See README.md.
+// OpenFront Pilot 0.12.0 — locally running strategy bot. See README.md.
 (() => {
   // src/panel.js
   function createPanel(document2) {
@@ -276,7 +276,7 @@
         <div class="mark">P</div>
         <div>
           <h1>OpenFront Pilot</h1>
-          <div class="version">LOCAL STRATEGY BOT \xB7 v0.11.0</div>
+          <div class="version">LOCAL STRATEGY BOT \xB7 v0.12.0</div>
         </div>
         <div class="spacer"></div>
         <button class="icon collapse" aria-label="Collapse panel" title="Collapse">\u2212</button>
@@ -406,17 +406,37 @@
     stop() {
       this.epoch++;
       this.navigating = false;
+      this.unspawnable = null;
       try {
         this.storage.removeItem(REQUEUE_KEY);
       } catch {
       }
     }
-    async step(active) {
+    recover(active) {
+      if (!active() || this.navigating) return;
+      this.storage.setItem(REQUEUE_KEY, JSON.stringify({ expires: Date.now() + 12e4 }));
+      this.navigating = true;
+      try {
+        this.navigate("/");
+      } catch (error) {
+        this.navigating = false;
+        this.storage.removeItem(REQUEUE_KEY);
+        throw error;
+      }
+    }
+    async step(active, now = Date.now()) {
       if (this.busy || this.navigating) return this.busy || this.navigating;
       const g = this.adapter.game, me = g?.myPlayer(), config = g?.config();
-      if (!active() || !g || config.isReplay?.() || config.isIntentionalSpectator?.() || g.inSpawnPhase())
+      if (!active() || !g || config?.isReplay?.() || g.isCatchingUp?.() || g.inSpawnPhase() && !config?.isIntentionalSpectator?.()) {
+        this.unspawnable = null;
         return false;
-      if (!g.gameOver?.() && !(me?.hasSpawned?.() && !me.isAlive())) return false;
+      }
+      const spectator = config?.isIntentionalSpectator?.() || !me || me.hasSpawned?.() === false;
+      if (spectator) {
+        if (this.unspawnable?.game !== g) this.unspawnable = { game: g, since: now };
+      } else this.unspawnable = null;
+      const stranded = this.unspawnable && now - this.unspawnable.since >= 15e3;
+      if (!g.gameOver?.() && !(me?.hasSpawned?.() && !me.isAlive()) && !stranded) return false;
       this.busy = true;
       const epoch = this.epoch;
       try {
@@ -432,9 +452,7 @@
           clearTimeout(timer);
         }
         if (!active() || this.epoch !== epoch || !this.adapter.sameGame(g)) return true;
-        this.storage.setItem(REQUEUE_KEY, JSON.stringify({ expires: Date.now() + 12e4 }));
-        this.navigating = true;
-        this.navigate("/");
+        this.recover(active);
         return true;
       } finally {
         this.busy = false;
@@ -853,21 +871,32 @@
 
   // src/setup.js
   var LobbyStarter = class {
-    constructor(adapter, report, ready) {
+    constructor(adapter, report, ready, recover = () => {
+    }) {
       this.adapter = adapter;
       this.report = report;
       this.ready = ready;
+      this.recover = recover;
+      this.epoch = 0;
       this.active = false;
       this.attempted = null;
+      this.waitSince = null;
+      this.retryAt = 0;
+      this.failedLobby = null;
     }
     start() {
+      this.epoch++;
       this.active = true;
       this.attempted = null;
+      this.waitSince = null;
+      this.retryAt = 0;
+      this.failedLobby = null;
     }
     stop() {
+      this.epoch++;
       this.active = false;
     }
-    step() {
+    step(now = Date.now()) {
       if (!this.active) return;
       if (this.adapter.connect() && !this.adapter.game.gameOver?.()) {
         if (this.adapter.game.config().gameConfig?.().gameMode !== "Free For All") {
@@ -881,16 +910,31 @@
         return;
       }
       const selector = this.adapter.document.querySelector("game-mode-selector");
+      if (this.waitSince !== null && now - this.waitSince >= 9e4) {
+        this.epoch++;
+        this.failedLobby = this.attempted;
+        this.waitSince = null;
+        this.attempted = null;
+        this.retryAt = now + 5e3;
+        this.report({
+          status: "waiting",
+          message: "Lobby loading timed out. Recovering the next FFA entry."
+        });
+        if (!selector || selector.inLobby) return this.recover();
+      }
+      if (now < this.retryAt) return;
       if (!selector || selector.inLobby || this.attempted) {
+        this.waitSince ??= now;
         this.report({
           status: "waiting",
           message: this.attempted ? "Waiting for the FFA lobby and map to load." : "Waiting for the OpenFront homepage."
         });
         return;
       }
-      const lobby = selector.lobbies?.games?.ffa?.find(
+      const eligible = selector.lobbies?.games?.ffa?.filter(
         (l) => l.gameConfig?.gameMode === "Free For All" && (!l.gameConfig.maxPlayers || l.numClients < l.gameConfig.maxPlayers) && (!l.gameConfig.trusted || selector.viewerTrusted)
       );
+      const lobby = eligible?.find((l) => l.gameID !== this.failedLobby) ?? eligible?.[0];
       if (!lobby) {
         this.report({
           status: "waiting",
@@ -906,11 +950,32 @@
         return;
       }
       this.attempted = lobby.gameID;
-      selector.validateAndJoin(lobby);
+      this.waitSince = now;
+      const epoch = ++this.epoch;
+      const failed = () => {
+        if (!this.active || this.epoch !== epoch) return;
+        this.failedLobby = lobby.gameID;
+        this.attempted = null;
+        this.retryAt = Date.now() + 5e3;
+        this.report({
+          status: "waiting",
+          message: "Lobby join failed. Retrying through the normal game menu shortly."
+        });
+      };
       this.report({
         status: "waiting",
         message: "FFA join requested. Waiting for connection and map loading; complete any prompt shown by the game."
       });
+      try {
+        const result = selector.validateAndJoin(lobby);
+        if (result === false) failed();
+        else if (result?.then)
+          Promise.resolve(result).then((value) => {
+            if (value === false) failed();
+          }, failed);
+      } catch {
+        failed();
+      }
     }
   };
 
@@ -2125,7 +2190,7 @@
     const part = (x) => String(x ?? "unknown").replace(/[|]/g, "_").slice(0, 24);
     const custom = Boolean(config.infiniteGold || config.infiniteTroops || config.instantBuild);
     return [
-      "conquest-v11-renewals-networks",
+      "conquest-v12-early-navy",
       config.gameType,
       config.gameMode,
       config.difficulty,
@@ -2388,6 +2453,12 @@
         const strike = await this.nuclear(state, active);
         if (!active()) return null;
         if (strike) return strike;
+      }
+      const age = state.game.ticksSinceStart?.();
+      if (Number.isFinite(age) && age >= 0 && age < EARLY_GAME_TICKS && this.options.navy && !humanIncoming.length && !state.immunized && this.adapter.bridge.supports("boat") && !this.cooldown("boat", state.tick, COOLDOWNS.navalLanding) && !(state.allOutgoing ?? state.outgoing).length && !state.own.some((unit) => unit.type === U.transport) && state.troops > reserve + 1e3) {
+        const boat = await this.landing(state, reserve, active);
+        if (!active()) return null;
+        if (boat) return boat;
       }
       if (this.options.economy && !this.cooldown("build", state.tick, COOLDOWNS.routineBuild)) {
         const build = await this.investment(state, reserve, active);
@@ -3029,7 +3100,8 @@
       () => {
         controller.start({ explicit: true });
         return controller.running;
-      }
+      },
+      () => requeue.recover(() => starter.active && !controller.stopped)
     );
     const requeue = new AutoRequeue(
       controller.adapter,
@@ -3044,7 +3116,7 @@
     );
     const tick = async () => {
       try {
-        if (starter.active) starter.step();
+        if (starter.active) await starter.step();
         else if (controller.running && await requeue.step(() => controller.running && !controller.stopped))
           return;
         else await controller.step();
