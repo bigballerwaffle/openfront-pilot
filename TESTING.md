@@ -1,5 +1,9 @@
 # Validation record
 
+## v0.10.0 readability refactor
+
+The same 116 behavioral tests are retained. Strategy policies are separated into combat, diplomacy, construction, naval, nuclear, and spawn modules; command validation and panel markup have their own files. Local identifiers are expanded, important thresholds are named in `rules.js`, and source formatting is reproducible with Prettier. No strategy revision, storage-key migration, or gameplay threshold change is intended. Validation consists of formatting checks, rebuilding `pilot.js`, its JavaScript syntax check, and the full existing suite against the rebuilt bundle. See CODE-GUIDE.md for the source map and decision walkthrough.
+
 ## v0.10.0 opening growth, defense, diplomacy and spawn relocation
 
 The 116-test suite covers the existing behavior plus ten new scenarios: posts before retaliation; structure-triggered counters; huge-push spending beyond the ordinary two-level cap; early capacity relief before routine purchases; early reinforcement; compact target selection without region samples; stronger-neighbor alliances; diplomacy during reinforcement and late renewals; more than two useful flank commitments; repeated spawn relocation with stop/phase guards; and dispatch rejection after structure danger is absent. Some scenarios share a test. Older counter fixtures now include threatened structures, and the previous two-alliance expectation was updated for the requested expanded flank policy.

@@ -95,6 +95,8 @@ On a confirmed game-over state or elimination of an already-spawned player, the 
 
 ## Files and development
 
+Start with [CODE-GUIDE.md](CODE-GUIDE.md) for a plain-language reading order, a map of the strategy modules, and examples of how a decision reaches the game. Important policy thresholds live in `src/rules.js`. The readable source is formatted with `npm run format`; `npm run format:check` checks it without editing.
+
 `pilot.js` is the ready-to-run bundled extension. `src/` contains its readable source, split into the adapter, command bridge, strategy, controller, and panel. `tests/` contains behavioral regression tests.
 
 With Node.js 24 or later:

@@ -5,10 +5,13 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "format": "prettier --write src scripts",
+    "format:check": "prettier --check src scripts"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
-    "jsdom": "^26.1.0"
+    "jsdom": "^26.1.0",
+    "prettier": "3.6.2"
   }
 }
