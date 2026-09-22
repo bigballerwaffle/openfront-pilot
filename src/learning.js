@@ -1,4 +1,5 @@
 // Small, persistent contextual bandit. Only aggregate results are retained.
+import { validateCoaching } from './coaching.js';
 export const LEARNING_KEY = 'openfront-pilot-learning-v1';
 export const LIMITS = Object.freeze({
   contexts: 12,
@@ -82,6 +83,7 @@ const empty = () => ({
   history: [],
   seen: [],
   outcomes: [],
+  coaching: [],
 });
 const arm = () => ({ games: 0, wins: 0, weight: 0, reward: 0 });
 const bounded = (n, max = 1e9) => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= max;
@@ -159,6 +161,7 @@ export function validateModel(raw) {
       };
     }
     return {
+      assisted: h.assisted === true,
       reward,
       territory,
       id: h.id,
@@ -187,6 +190,7 @@ export function validateModel(raw) {
     history,
     seen: [...new Set(d.seen)],
     outcomes,
+    coaching: validateCoaching(d.coaching),
   };
 }
 
@@ -200,7 +204,7 @@ export function contextKey(game, options) {
       .slice(0, 24);
   const custom = Boolean(config.infiniteGold || config.infiniteTroops || config.instantBuild);
   return [
-    'conquest-v12-early-navy',
+    'conquest-v13-coaching',
     config.gameType,
     config.gameMode,
     config.difficulty,
@@ -275,6 +279,32 @@ export class LearningStore {
     }
     return VARIANTS[index];
   }
+  async teach(key, sample, accept = () => true) {
+    const commit = () => {
+      if (!accept()) return false;
+      this.reload();
+      const rows = structuredClone(this.data.coaching);
+      let row = rows.find((r) => r.key === key);
+      if (row) rows.splice(rows.indexOf(row), 1);
+      else row = { key, stats: {} };
+      const stat = row.stats[sample.label] ?? { count: 0, sum: 0 };
+      if (stat.count >= 100) {
+        stat.sum *= 0.99;
+        stat.count = 99;
+      }
+      stat.count++;
+      stat.sum += sample.value;
+      row.stats[sample.label] = stat;
+      rows.push(row);
+      const coaching = validateCoaching(rows.slice(-24));
+      const next = { ...this.data, coaching };
+      if (JSON.stringify(next).length * 2 > LIMITS.bytes) return false;
+      this.data = next;
+      this.persist();
+      return true;
+    };
+    return this.locks?.request ? this.locks.request(LEARNING_KEY, commit) : commit();
+  }
   async record(summary, accept = () => true) {
     const commit = () => {
       if (!accept()) return false;
@@ -313,6 +343,8 @@ export class LearningStore {
         this.data.history.push({ ...summary, date: Date.now() });
         this.data.history = this.data.history.slice(-LIMITS.history);
         this.data.seen = [...this.data.seen, summary.id].slice(-LIMITS.seen);
+        while (JSON.stringify(this.data).length * 2 > LIMITS.bytes && this.data.coaching.length)
+          this.data.coaching.shift();
         this.data = validateModel(JSON.stringify(this.data));
         this.persist();
         return true;
@@ -360,6 +392,10 @@ export class LearningStore {
       wins: this.data.wins,
       bytes: JSON.stringify(this.data).length * 2,
       contexts: this.data.contexts.length,
+      coachingSamples: this.data.coaching.reduce(
+        (sum, row) => sum + Object.values(row.stats).reduce((n, stat) => n + stat.count, 0),
+        0,
+      ),
       warning: this.warning,
       rows,
       recent: this.data.history.slice(-8).reverse(),

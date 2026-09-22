@@ -1,6 +1,8 @@
 import { COMMAND_CONFIRMATION_TICKS, STALLED_CLOCK_WARNING_MS } from './rules.js';
 import { Strategy, DEFAULTS } from './strategy.js';
 import { U } from './common.js';
+import { coachingState, lesson, coachedTuning, prefersSaving } from './coaching.js';
+import { contextKey } from './learning.js';
 
 export class PilotController {
   constructor(adapter, report = () => {}, options = {}, learning = null) {
@@ -16,6 +18,52 @@ export class PilotController {
     this.commands = 0;
     this.learning = learning;
     this.stopped = false;
+    this.adapter.spendingAllowed = () => this.options.spending !== false;
+  }
+  observeManual() {
+    if (this.observedBridge === this.adapter.bridge) return;
+    this.restoreManual?.();
+    this.observedBridge = this.adapter.bridge;
+    this.restoreManual = this.adapter.bridge?.observeManual?.((kind, event) =>
+      this.teach(kind, event),
+    );
+  }
+  teach(kind, event = {}) {
+    if (!this.running || this.stopped || !this.options.learning || !this.learning?.store) return;
+    // Even actions we cannot imitate (such as diplomacy or manual spawning)
+    // make this an assisted game, not an unaided strategy trial.
+    if (this.adapter.game) this.learning.assist?.(this.adapter.game);
+    const state = coachingState(this.adapter.game);
+    if (!state) return;
+    const sample = lesson(kind, event, state);
+    if (!sample) return;
+    const key = contextKey(state.game, this.options) + ':' + state.key;
+    const generation = this.learning.generation;
+    const accept = () =>
+      this.running &&
+      !this.stopped &&
+      this.adapter.game === state.game &&
+      this.options.learning &&
+      this.learning.generation === generation;
+    // The user has supplied a fresh decision. Discard an older in-flight plan.
+    this.epoch++;
+    this.pending = null;
+    this.adapter.lastMap = null;
+    this.learning.assist?.(state.game);
+    this.learning.store
+      .teach(key, sample, accept)
+      .then((saved) => {
+        if (saved && accept())
+          this.learning.notify(
+            'Manual guidance learned: ' +
+              sample.label +
+              '. Preferences adapt after repeated examples; safety rules still apply.',
+          );
+      })
+      .catch(() => {});
+    if (kind === 'build' || kind === 'upgrade') {
+      this.learning.store.teach(key, { label: 'spend', value: 1 }, accept).catch(() => {});
+    }
   }
   start({ explicit = false } = {}) {
     if (this.stopped && !explicit) return;
@@ -31,6 +79,7 @@ export class PilotController {
     this.game = this.adapter.game;
     this.epoch++;
     this.running = true;
+    this.observeManual();
     this.stopped = false;
     this.pending = null;
     this.lastTick = null;
@@ -53,6 +102,9 @@ export class PilotController {
     this.stopped = true;
     this.epoch++;
     this.pending = null;
+    this.restoreManual?.();
+    this.restoreManual = null;
+    this.observedBridge = null;
     try {
       this.learning?.abort();
     } catch {
@@ -79,6 +131,7 @@ export class PilotController {
           this.pending = null;
           this.lastTick = null;
           this.strategy = new Strategy(this.adapter, this.options);
+          this.observeManual();
           this.report({
             status: 'waiting',
             message: 'New match detected; attaching automatically.',
@@ -122,6 +175,26 @@ export class PilotController {
       }
       this.report({ status: 'running', snapshot: state, commands: this.commands });
       if (this.learning) this.strategy.tuning = this.learning.begin(state, this.options);
+      this.strategy.saveGold = false;
+      if (this.options.learning && this.learning?.store) {
+        const view = coachingState(state.game);
+        if (view) {
+          const key = contextKey(state.game, this.options) + ':' + view.key;
+          const stats = this.learning.store.data.coaching.find((r) => r.key === key)?.stats;
+          this.strategy.tuning = coachedTuning(this.strategy.tuning, stats);
+          // A learned pause is bounded to 30 seconds per context per match.
+          this.savingWindows ??= new Map();
+          if (this.savingGame !== state.game) {
+            this.savingGame = state.game;
+            this.savingWindows.clear();
+          }
+          if (prefersSaving(stats)) {
+            if (!this.savingWindows.has(key)) this.savingWindows.set(key, state.tick);
+            this.strategy.saveGold = state.tick - this.savingWindows.get(key) < 300;
+          }
+        }
+      }
+      this.report({ status: 'running', savingGold: this.strategy.saveGold });
       if (this.pending) {
         if (this.adapter.confirmed(state, this.pending)) {
           this.report({
@@ -151,7 +224,10 @@ export class PilotController {
         this.report({ status: 'running', message: action.reason });
         return;
       }
-      const sent = await this.adapter.execute(state, action, active);
+      const permitted = () =>
+        active() && (action.kind !== 'build' || this.options.spending !== false);
+      if (!permitted()) return;
+      const sent = await this.adapter.execute(state, action, permitted);
       if (!active()) return;
       if (sent) {
         this.pending = sent;

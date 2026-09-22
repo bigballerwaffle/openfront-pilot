@@ -56,6 +56,7 @@ export class MatchLearning {
     this.onChange = onChange;
     this.run = null;
     this.seenGames = new WeakSet();
+    this.assistedGames = new WeakSet();
     this.message = 'Learning is ready. Start a match to collect a result.';
     this.lastSave = Promise.resolve();
     this.generation = 0;
@@ -106,6 +107,7 @@ export class MatchLearning {
       running: true,
       done: false,
       excluded: '',
+      assisted: this.assistedGames.has(g) || options.spending === false,
       restore: null,
     };
     if (run.id.length > 100) {
@@ -176,6 +178,10 @@ export class MatchLearning {
   command() {
     if (this.run && !this.run.done) this.run.commands++;
   }
+  assist(game = this.run?.game) {
+    if (game) this.assistedGames.add(game);
+    if (this.run?.game === game && !this.run.done) this.run.assisted = true;
+  }
   invalidate(reason) {
     if (!this.run || this.run.done || this.run.excluded) return;
     this.run.excluded = reason;
@@ -202,7 +208,8 @@ export class MatchLearning {
       reward,
       territory,
       id: r.id,
-      context: r.context,
+      context: r.assisted ? r.context + '|assisted' : r.context,
+      assisted: r.assisted === true,
       variant: r.variant.id,
       win,
       ticks: r.totalTicks,
@@ -217,7 +224,7 @@ export class MatchLearning {
         if (!accept()) return;
         this.notify(
           saved
-            ? `${win ? 'Win' : 'Loss'} learned · reward ${(reward * 100).toFixed(1)}/100${territory ? ` · peak land ${(territory.peakShare * 100).toFixed(1)}%` : ' · territory unavailable'}.`
+            ? `${r.assisted ? 'Assisted ' : ''}${win ? 'win' : 'loss'} learned · reward ${(reward * 100).toFixed(1)}/100${territory ? ` · peak land ${(territory.peakShare * 100).toFixed(1)}%` : ' · territory unavailable'}.`
             : 'This match was already learned; it was not counted twice.',
         );
       })

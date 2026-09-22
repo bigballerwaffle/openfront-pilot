@@ -64,6 +64,42 @@ export class EventBridge {
   emit(key, args) {
     const Ctor = this.events[key];
     if (!Ctor) throw new Error(`The ${key} command is unavailable in this client.`);
-    this.bus.emit(Reflect.construct(Ctor, args));
+    const event = Reflect.construct(Ctor, args);
+    this.ownEvents ??= new WeakSet();
+    this.ownEvents.add(event);
+    this.bus.emit(event);
+  }
+  observeManual(callback) {
+    const bus = this.bus,
+      original = bus.emit,
+      bridge = this;
+    const descriptor = Object.getOwnPropertyDescriptor(bus, 'emit');
+    function wrapped(event, ...args) {
+      // Capture intent before native handlers can change troop/gold totals.
+      if (!bridge.ownEvents?.has(event)) {
+        const kind = Object.keys(bridge.events).find(
+          (k) => event?.constructor === bridge.events[k],
+        );
+        if (kind) {
+          try {
+            callback(kind, event);
+          } catch {
+            /* Observers cannot interrupt play. */
+          }
+        }
+      }
+      return Reflect.apply(original, this, [event, ...args]);
+    }
+    try {
+      bus.emit = wrapped;
+    } catch {
+      return null;
+    }
+    if (bus.emit !== wrapped) return null;
+    return () => {
+      if (bus.emit !== wrapped) return;
+      if (descriptor) Object.defineProperty(bus, 'emit', descriptor);
+      else delete bus.emit;
+    };
   }
 }

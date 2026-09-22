@@ -20,7 +20,7 @@ function boot() {
     const saved = JSON.parse(localStorage.getItem(KEY) || '{}');
     if (['cautious', 'balanced', 'aggressive'].includes(saved.profile))
       options.profile = saved.profile;
-    for (const k of ['economy', 'navy', 'nukes', 'learning', 'diplomacy'])
+    for (const k of ['economy', 'navy', 'nukes', 'learning', 'diplomacy', 'spending'])
       if (typeof saved[k] === 'boolean') options[k] = saved[k];
   } catch {
     /* Defaults work even if storage is unavailable. */
@@ -59,7 +59,7 @@ function boot() {
       ? 'Match trial: ' + info.variant
       : 'Seven strategy variants; no game recordings.';
     $('#learn-memory').textContent =
-      `${info.wins} wins learned · ${(info.bytes / 1024).toFixed(1)} / 64 KiB · ${info.contexts} match types`;
+      `${info.wins} wins learned · ${(info.bytes / 1024).toFixed(1)} / 64 KiB · ${info.contexts} match types · ${info.coachingSamples ?? 0} coaching examples`;
     const recent = info.recent[0];
     $('#learn-reward').textContent = recent
       ? `Last match score: ${(recent.reward * 100).toFixed(1)}/100${recent.territory ? ` · peak ${(recent.territory.peakShare * 100).toFixed(1)}% · average ${(recent.territory.averageShare * 100).toFixed(1)}% land` : ' · no territory data'}`
@@ -87,6 +87,10 @@ function boot() {
       $('#state').textContent = update.status;
       $('.dot').className = 'dot ' + update.status;
       if (update.message) $('#message').textContent = update.message;
+      if (update.savingGold !== undefined)
+        $('#coach-status').textContent = update.savingGold
+          ? 'Learned saving preference: postponing routine purchases (up to 30 seconds).'
+          : 'Manual guidance adapts troop sends, city/income balance and saving preferences.';
       if (update.snapshot) {
         const s = update.snapshot;
         $('#compatibility').textContent =
@@ -176,6 +180,22 @@ function boot() {
     }
   };
   root.addEventListener('change', save);
+  const renderSpending = () => {
+    const enabled = controller.options.spending !== false;
+    $('#spending').textContent = enabled
+      ? 'Bot spending: ON — click to save gold'
+      : 'Bot spending: OFF — click to allow';
+    $('#spending').setAttribute('aria-pressed', String(enabled));
+  };
+  renderSpending();
+  $('#spending').addEventListener('click', () => {
+    controller.options.spending = controller.options.spending === false;
+    controller.teach(controller.options.spending ? 'spend' : 'save');
+    renderSpending();
+    try {
+      localStorage.setItem(KEY, JSON.stringify(controller.options));
+    } catch {}
+  });
   $('#learn-export').addEventListener('click', () => {
     const url = URL.createObjectURL(
       new Blob([learningStore.export()], { type: 'application/json' }),

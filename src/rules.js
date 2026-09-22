@@ -5,6 +5,7 @@
 export const DEFAULTS = Object.freeze({
   profile: 'balanced',
   economy: true,
+  spending: true,
   navy: true,
   nukes: true,
   learning: true,

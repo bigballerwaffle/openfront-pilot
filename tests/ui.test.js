@@ -11,6 +11,31 @@ function page() {
   return { dom, window: dom.window, root: dom.window.document.querySelector('openfront-pilot').shadowRoot };
 }
 
+test('bundled spending lock persists across reloads and is independent of build settings', () => {
+  const first = page(); let preferences;
+  try {
+    const button = first.root.querySelector('#spending');
+    button.click(); assert.equal(button.getAttribute('aria-pressed'), 'false');
+    assert.equal(first.root.querySelector('#economy').checked, true);
+    first.window.confirm = () => false;
+    first.root.querySelector('#learn-reset').click();
+    preferences = first.window.localStorage.getItem('openfront-pilot-options-v1');
+    assert.equal(JSON.parse(preferences).spending, false);
+  } finally { first.dom.window.close(); }
+  const dom = new JSDOM('<!doctype html>', { url: 'https://openfront.io/', runScripts: 'outside-only' });
+  try {
+    dom.window.structuredClone = structuredClone;
+    dom.window.localStorage.setItem('openfront-pilot-options-v1', preferences);
+    dom.window.eval(bundle);
+    const root = dom.window.document.querySelector('openfront-pilot').shadowRoot;
+    assert.equal(root.querySelector('#spending').getAttribute('aria-pressed'), 'false');
+    root.querySelector('.start').click();
+    assert.equal(root.querySelector('#spending').getAttribute('aria-pressed'), 'false');
+    root.querySelector('#spending').click();
+    assert.equal(root.querySelector('#spending').getAttribute('aria-pressed'), 'true');
+  } finally { dom.window.close(); }
+});
+
 test('bundled lobby retry stays armed and Stop cancels later retries', async () => {
   const { dom, window, root } = page(); let callback, now = 1000, joins = 0;
   window.Date.now = () => now;

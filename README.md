@@ -18,7 +18,17 @@ The extension starts paused. Start authorizes continuous play: after a match end
 **Alt-Tab and changing tabs do not stop it.** Keep the game tab open; closing/reloading the page, browser suspension and computer sleep can still interrupt any page script. Escape works while the game tab has keyboard focus, not system-wide. Stopping does not undo commands already accepted by the game. The panel can be dragged or collapsed.
 
 
-## Strategy in v0.12.0
+## Manual coaching and spending in v0.13.0
+
+**Bot spending: ON/OFF** is a separate master permission. OFF blocks bot buildings, upgrades, warships, nuclear purchases and any gold-priced transport, including emergency purchases. Troop-only attacks, free transports and diplomacy can continue. Purchases you make yourself are unaffected. The setting survives refreshes and automatic requeues. **Only clicking the button can turn it back on; neither training nor the strategy changes this switch.** Commands already accepted by the game cannot be undone.
+
+While both the pilot and learning are running, recognized non-pilot attack, transport, build and upgrade intents provide coaching examples. Spending-switch changes in a live match also provide examples. The bot excludes its own commands and keeps only bounded aggregates, not recordings or map coordinates. Teaching is based on intent, not confirmation of a successful purchase or proof that it improved the result. Other scripts emitting native commands would also look like manual guidance; use only one automation extension.
+
+After at least three comparable examples, coaching can influence troop-send fractions within existing limits and the city-versus-income balance. Situations distinguish opening/late play, gold bracket, silo availability, incoming pressure and troop capacity. Three saving examples with at least 75% saving votes can defer routine purchases for up to 300 ticks (roughly 30 seconds) per situation per match; contrary spending examples weaken that preference. This learned pause never enables the master spending permission. When spending is allowed, urgent defenses and eligible nuclear strikes can still take priority over a learned routine-purchase pause. Transport, defense and nuclear examples are retained, but do not yet teach target selection, placement or a long-term nuclear budget. This is bounded imitation, not general strategy understanding or a guarantee of improved play.
+
+Assisted match outcomes are stored under separate contexts so your interventions do not falsely improve an unaided variant's score. Recognized coaching remains useful even if a final result is unavailable. The learning panel reports coaching-example counts; export/import/reset include them within the existing 64 KiB limit. Old backups remain compatible. Stop cancels pending coaching writes and detaches command observation; learning off prevents new examples and their application. Manual help made while stopped is not recorded.
+
+## Existing strategy
 
 This revision adds failed-lobby recovery, departure from unspawnable spectator sessions, and earlier naval opportunities. During the first ten minutes, safe landings can precede routine building and new land attacks even with adjacent wilderness or enemies. Defense, committed conquests, spawn immunity, troop reserves, transport cooldowns and crossing safety still take priority. At high opening capacity, available land expansion retains priority.
 
@@ -89,7 +99,7 @@ Export/import/reset during a trial is handled without modifying game state; impo
 
 ### Updating an existing installation
 
-Update the files in your installed `openfront-pilot` folder. In `chrome://extensions`, click the reload arrow on OpenFront Pilot, then refresh the game tab. The panel should say **v0.12.0**. If you have no installation, follow the installation steps above. Updating extension files preserves learning already saved in the browser. This strategy revision starts separate variant scores so old results do not falsely rate the new rules; existing summaries remain until normal memory limits evict them. Keep only one enabled copy of the extension.
+Update the files in your installed `openfront-pilot` folder. In `chrome://extensions`, click the reload arrow on OpenFront Pilot, then refresh the game tab. The panel should say **v0.13.0**. If you have no installation, follow the installation steps above. Updating extension files preserves learning already saved in the browser. This strategy revision starts separate variant scores so old results do not falsely rate the new rules; existing summaries remain until normal memory limits evict them. Keep only one enabled copy of the extension.
 
 ## Automatic setup details
 
